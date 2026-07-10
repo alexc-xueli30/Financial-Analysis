@@ -120,6 +120,19 @@ def resolve_company(query: str) -> tuple[str, str]:
     query_stripped = query.strip()
     query_upper = query_stripped.upper()
     query_lower = query_stripped.lower()
+
+    # Custom brand-to-ticker alias mappings
+    _BRAND_ALIASES = {
+        "spacex": "SPCX",
+        "google": "GOOGL",
+        "alphabet": "GOOGL",
+        "facebook": "META",
+        "meta": "META",
+    }
+    if query_lower in _BRAND_ALIASES:
+        query_upper = _BRAND_ALIASES[query_lower]
+        query_lower = query_upper.lower()
+
     data = _get_ticker_data()
 
     for entry in data.values():
@@ -267,98 +280,306 @@ def get_net_income_values(facts_data: dict) -> dict:
     return merged
 
 
+# ── QUARTERLY HELPER EXTRACTORS ──
+
+def get_quarterly_flow_values(facts_data: dict, concept: str) -> dict:
+    """
+    Extract quarterly (10-Q and 10-K) 3-month flow values for *concept*.
+    Looks for entries with duration ~3 months (80-105 days).
+    Computes missing Q4 or Q2/Q3 cumulative overlaps as fallback.
+    """
+    try:
+        entries = facts_data["facts"]["us-gaap"][concept]["units"]["USD"]
+    except KeyError:
+        return {}
+
+    quarterly: dict[str, tuple] = {}
+    for entry in entries:
+        form = entry.get("form")
+        if form not in ("10-Q", "10-K"):
+            continue
+        fy = entry.get("fy")
+        fp = entry.get("fp")
+        start = entry.get("start")
+        end = entry.get("end")
+        if not fy or not fp or not start or not end:
+            continue
+            
+        period = "Q4" if fp == "FY" else fp
+        if period not in ("Q1", "Q2", "Q3", "Q4"):
+            continue
+            
+        try:
+            duration = (date.fromisoformat(end) - date.fromisoformat(start)).days
+        except ValueError:
+            continue
+            
+        # 3-month flow
+        if 80 <= duration <= 105:
+            key = f"{fy}-{period}"
+            filed = entry.get("filed", "")
+            if key not in quarterly or filed > quarterly[key][1]:
+                quarterly[key] = (entry["val"], filed)
+
+    # Fallbacks for missing 3m periods
+    q1_3m_flows: dict[int, tuple] = {}
+    q2_6m_flows: dict[int, tuple] = {}
+    q3_9m_flows: dict[int, tuple] = {}
+    fy_flows: dict[int, tuple] = {}
+    
+    for entry in entries:
+        form = entry.get("form")
+        if form not in ("10-Q", "10-K"):
+            continue
+        fy = entry.get("fy")
+        fp = entry.get("fp")
+        start = entry.get("start")
+        end = entry.get("end")
+        if not fy or not fp or not start or not end:
+            continue
+            
+        try:
+            duration = (date.fromisoformat(end) - date.fromisoformat(start)).days
+        except ValueError:
+            continue
+            
+        filed = entry.get("filed", "")
+        if fp == "Q1" and 80 <= duration <= 105:
+            if fy not in q1_3m_flows or filed > q1_3m_flows[fy][1]:
+                q1_3m_flows[fy] = (entry["val"], filed)
+        elif fp == "Q2" and 170 <= duration <= 195:
+            if fy not in q2_6m_flows or filed > q2_6m_flows[fy][1]:
+                q2_6m_flows[fy] = (entry["val"], filed)
+        elif fp == "Q3" and 260 <= duration <= 285:
+            if fy not in q3_9m_flows or filed > q3_9m_flows[fy][1]:
+                q3_9m_flows[fy] = (entry["val"], filed)
+        elif fp == "FY" and 350 <= duration <= 380:
+            if fy not in fy_flows or filed > fy_flows[fy][1]:
+                fy_flows[fy] = (entry["val"], filed)
+
+    # Compute Q2 = Q2-6m - Q1-3m
+    for fy in q2_6m_flows:
+        key = f"{fy}-Q2"
+        if key not in quarterly and fy in q1_3m_flows:
+            q2_val = q2_6m_flows[fy][0] - q1_3m_flows[fy][0]
+            quarterly[key] = (q2_val, q2_6m_flows[fy][1])
+            
+    # Compute Q3 = Q3-9m - Q2-6m
+    for fy in q3_9m_flows:
+        key = f"{fy}-Q3"
+        if key not in quarterly and fy in q2_6m_flows:
+            q3_val = q3_9m_flows[fy][0] - q2_6m_flows[fy][0]
+            quarterly[key] = (q3_val, q3_9m_flows[fy][1])
+
+    # Compute Q4 = FY-12m - Q3-9m
+    for fy in fy_flows:
+        key = f"{fy}-Q4"
+        if key not in quarterly and fy in q3_9m_flows:
+            q4_val = fy_flows[fy][0] - q3_9m_flows[fy][0]
+            quarterly[key] = (q4_val, fy_flows[fy][1])
+
+    return {k: val for k, (val, _) in quarterly.items()}
+
+
+def get_quarterly_point_values(facts_data: dict, concept: str) -> dict:
+    """
+    Extract quarterly (10-Q and 10-K) point-in-time values for *concept*.
+    Keyed by year-period string (e.g., '2023-Q1', '2023-Q2', '2023-Q3', '2023-Q4').
+    """
+    try:
+        entries = facts_data["facts"]["us-gaap"][concept]["units"]["USD"]
+    except KeyError:
+        return {}
+
+    quarterly: dict[str, tuple] = {}
+    for entry in entries:
+        form = entry.get("form")
+        if form not in ("10-Q", "10-K"):
+            continue
+        fy = entry.get("fy")
+        fp = entry.get("fp")
+        if not fy or not fp:
+            continue
+        
+        period = "Q4" if fp == "FY" else fp
+        if period not in ("Q1", "Q2", "Q3", "Q4"):
+            continue
+            
+        key = f"{fy}-{period}"
+        filed = entry.get("filed", "")
+        if key not in quarterly or filed > quarterly[key][1]:
+            quarterly[key] = (entry["val"], filed)
+
+    return {k: val for k, (val, _) in quarterly.items()}
+
+
+def get_quarterly_revenue_values(facts_data: dict) -> dict:
+    merged: dict = {}
+    for concept in _REVENUE_CONCEPTS:
+        merged.update(get_quarterly_flow_values(facts_data, concept))
+    return merged
+
+
+def get_quarterly_equity_values(facts_data: dict) -> dict:
+    merged: dict = {}
+    for concept in _EQUITY_CONCEPTS:
+        merged.update(get_quarterly_point_values(facts_data, concept))
+    return merged
+
+
+def get_quarterly_net_income_values(facts_data: dict) -> dict:
+    merged: dict = {}
+    for concept in _NET_INCOME_CONCEPTS:
+        merged.update(get_quarterly_flow_values(facts_data, concept))
+    return merged
+
+
 # ---------------------------------------------------------------------------
 # Ratio computation
 # ---------------------------------------------------------------------------
 
-def build_ratio_table(facts_data: dict) -> pd.DataFrame:
+def build_ratio_table(facts_data: dict, period_type: str = "annual") -> pd.DataFrame:
     """
-    Compute annual financial ratios from *facts_data*.
-    Raises InsufficientDataError if there aren't at least 2 usable years.
+    Compute financial ratios from *facts_data* for either "annual" or "quarterly" periods.
     """
-    revenues = get_revenue_values(facts_data)
-    net_income = get_net_income_values(facts_data)
-    assets = get_annual_point_values(facts_data, "Assets")
-    equity = get_equity_values(facts_data)
-    current_assets = get_annual_point_values(facts_data, "AssetsCurrent")
-    current_liabilities = get_annual_point_values(facts_data, "LiabilitiesCurrent")
-
-    liabilities = {y: assets[y] - equity[y] for y in assets if y in equity}
-
-    # Core intersection: revenue, net income, assets, equity are always required.
-    # Current assets/liabilities are optional — financial institutions don't report them,
-    # and some companies only added current breakdown disclosure in later filings.
-    core_years = sorted(
-        set(revenues)
-        & set(net_income)
-        & set(assets)
-        & set(equity)
-    )
-
-    if not core_years:
+    if "us-gaap" not in facts_data.get("facts", {}):
         raise InsufficientDataError(
-            "No years with complete data across all required concepts "
-            "(Revenue, NetIncomeLoss, Assets, Equity). "
-            "The company may use non-standard XBRL tags or have incomplete filings."
+            f"No public US-GAAP financial reports (10-K/10-Q) were found for '{facts_data.get('entityName', 'this company')}' (CIK {facts_data.get('cik')}). "
+            "The company is currently registered with the SEC, but has not completed an IPO or filed standard public financial statements with tagged XBRL data."
         )
 
-    rows = []
-    for y in core_years:
-        rev = revenues[y]
-        eq = equity[y]
+    if period_type == "quarterly":
+        revenues = get_quarterly_revenue_values(facts_data)
+        net_income = get_quarterly_net_income_values(facts_data)
+        assets = get_quarterly_point_values(facts_data, "Assets")
+        equity = get_quarterly_equity_values(facts_data)
+        current_assets = get_quarterly_point_values(facts_data, "AssetsCurrent")
+        current_liabilities = get_quarterly_point_values(facts_data, "LiabilitiesCurrent")
+        
+        liabilities = {y: assets[y] - equity[y] for y in assets if y in equity}
+        
+        core_periods = sorted(
+            set(revenues)
+            & set(net_income)
+            & set(assets)
+            & set(equity)
+        )
+        
+        if not core_periods:
+            raise InsufficientDataError(
+                "No quarters with complete data across required concepts (Revenue, NetIncomeLoss, Assets, Equity)."
+            )
+            
+        rows = []
+        for p in core_periods:
+            rev = revenues[p]
+            eq = equity[p]
+            if rev == 0 or assets.get(p, 0) == 0:
+                continue
+                
+            cl = current_liabilities.get(p)
+            ca = current_assets.get(p)
+            current_ratio = (ca / cl) if (ca is not None and cl) else float("nan")
+            
+            rows.append({
+                "year": p, # Using key "year" to remain compatible with PDF/JS expectations
+                "revenue": rev,
+                "net_income": net_income[p],
+                "net_margin": net_income[p] / rev,
+                "current_ratio": current_ratio,
+                "debt_to_equity": liabilities.get(p, 0) / eq if eq != 0 else float("nan"),
+                "roe": net_income[p] / eq if eq != 0 else float("nan"),
+                "roa": net_income[p] / assets[p],
+            })
+            
+        if len(rows) < 2:
+            raise InsufficientDataError(f"Only {len(rows)} usable quarter(s) found — need at least 2.")
+            
+        df = pd.DataFrame(rows)
+        return df.sort_values("year").reset_index(drop=True)
 
-        # Skip years with zero denominators rather than crashing
-        if rev == 0 or assets.get(y, 0) == 0:
-            continue
+    else:
+        # Annual (10-K only)
+        revenues = get_revenue_values(facts_data)
+        net_income = get_net_income_values(facts_data)
+        assets = get_annual_point_values(facts_data, "Assets")
+        equity = get_equity_values(facts_data)
+        current_assets = get_annual_point_values(facts_data, "AssetsCurrent")
+        current_liabilities = get_annual_point_values(facts_data, "LiabilitiesCurrent")
 
-        cl = current_liabilities.get(y)
-        ca = current_assets.get(y)
-        # Use NaN when current ratio data is absent — never drop the row for a missing
-        # current ratio; banks and early XBRL filers often omit this breakdown.
-        current_ratio = (ca / cl) if (ca is not None and cl) else float("nan")
+        liabilities = {y: assets[y] - equity[y] for y in assets if y in equity}
 
-        rows.append({
-            "year": int(y[:4]),
-            "revenue": rev,
-            "net_income": net_income[y],
-            "net_margin": net_income[y] / rev,
-            "current_ratio": current_ratio,
-            "debt_to_equity": liabilities.get(y, 0) / eq if eq != 0 else float("nan"),
-            "roe": net_income[y] / eq if eq != 0 else float("nan"),
-            "roa": net_income[y] / assets[y],
-        })
-
-    if len(rows) < 2:
-        raise InsufficientDataError(
-            f"Only {len(rows)} usable year(s) after filtering zero-denominator rows — "
-            "need at least 2 to produce a meaningful report."
+        core_years = sorted(
+            set(revenues)
+            & set(net_income)
+            & set(assets)
+            & set(equity)
         )
 
-    return pd.DataFrame(rows)
+        if not core_years:
+            raise InsufficientDataError(
+                "No years with complete data across all required concepts "
+                "(Revenue, NetIncomeLoss, Assets, Equity)."
+            )
+
+        rows = []
+        for y in core_years:
+            rev = revenues[y]
+            eq = equity[y]
+
+            if rev == 0 or assets.get(y, 0) == 0:
+                continue
+
+            cl = current_liabilities.get(y)
+            ca = current_assets.get(y)
+            current_ratio = (ca / cl) if (ca is not None and cl) else float("nan")
+
+            rows.append({
+                "year": int(y[:4]),
+                "revenue": rev,
+                "net_income": net_income[y],
+                "net_margin": net_income[y] / rev,
+                "current_ratio": current_ratio,
+                "debt_to_equity": liabilities.get(y, 0) / eq if eq != 0 else float("nan"),
+                "roe": net_income[y] / eq if eq != 0 else float("nan"),
+                "roa": net_income[y] / assets[y],
+            })
+
+        if len(rows) < 2:
+            raise InsufficientDataError(
+                f"Only {len(rows)} usable year(s) after filtering — need at least 2."
+            )
+
+        return pd.DataFrame(rows)
 
 
 # ---------------------------------------------------------------------------
-# Risk flags  (unchanged from original)
+# Risk flags
 # ---------------------------------------------------------------------------
 
-def flag_risks(df: pd.DataFrame) -> list[tuple[int, str]]:
-    flags: list[tuple[int, str]] = []
+def flag_risks(df: pd.DataFrame) -> list[tuple[str, str]]:
+    """
+    Automated risk audit scanning. Only flags risks present in the LATEST period.
+    """
+    flags: list[tuple[str, str]] = []
+    if df.empty:
+        return flags
+        
     df = df.sort_values("year").reset_index(drop=True)
+    latest_idx = len(df) - 1
+    row = df.iloc[latest_idx]
+    period_str = str(row["year"])
 
-    for i in range(len(df)):
-        row = df.iloc[i]
-        year = int(row["year"])
-
-        if row["net_income"] < 0:
-            flags.append((year, "Negative net income"))
-        if not pd.isna(row["current_ratio"]) and row["current_ratio"] < 1.0:
-            flags.append((year, "Current ratio below 1.0 (liquidity risk)"))
-        if row["debt_to_equity"] > 3.0:
-            flags.append((year, "High leverage (debt/equity > 3.0)"))
-        if i >= 2:
-            last3 = df.iloc[i - 2 : i + 1]["net_margin"]
-            if last3.is_monotonic_decreasing:
-                flags.append((year, "Net margin declined 3 consecutive years"))
+    if row["net_income"] < 0:
+        flags.append((period_str, "Negative net income"))
+    if not pd.isna(row["current_ratio"]) and row["current_ratio"] < 1.0:
+        flags.append((period_str, "Current ratio below 1.0 (liquidity risk)"))
+    if row["debt_to_equity"] > 3.0:
+        flags.append((period_str, "High leverage (debt/equity > 3.0)"))
+    if latest_idx >= 2:
+        last3 = df.iloc[latest_idx - 2 : latest_idx + 1]["net_margin"]
+        if last3.is_monotonic_decreasing:
+            flags.append((period_str, "Net margin declined 3 consecutive periods"))
 
     return flags
 
@@ -411,7 +632,8 @@ def make_charts(df: pd.DataFrame, ticker: str, output_dir: str) -> str:
     ax1.set_title("Net Margin", fontsize=11, fontweight="bold", color="#1B2A4A", pad=8)
     ax1.set_xlabel("Fiscal Year", fontsize=8, color="#7F8C8D")
     ax1.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: f"{v:.0f}%"))
-    ax1.xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
+    if all(isinstance(y, (int, float)) for y in years):
+        ax1.xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
     ax1.tick_params(labelsize=8, colors="#555555")
     ax1.set_facecolor("white")
     ax1.grid(axis="y", color=GRID_COL, linewidth=0.8, zorder=1)
@@ -419,7 +641,7 @@ def make_charts(df: pd.DataFrame, ticker: str, output_dir: str) -> str:
         ax1.spines[spine].set_visible(False)
     for spine in ("bottom", "left"):
         ax1.spines[spine].set_color(SPINE_COL)
-
+ 
     # --- Debt / Equity ---
     de = df["debt_to_equity"]
     ax2.plot(years, de, marker="o", color=RED_HEX, linewidth=2, markersize=5, zorder=3)
@@ -429,7 +651,8 @@ def make_charts(df: pd.DataFrame, ticker: str, output_dir: str) -> str:
     ax2.set_title("Debt / Equity", fontsize=11, fontweight="bold", color="#1B2A4A", pad=8)
     ax2.set_xlabel("Fiscal Year", fontsize=8, color="#7F8C8D")
     ax2.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: f"{v:.1f}x"))
-    ax2.xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
+    if all(isinstance(y, (int, float)) for y in years):
+        ax2.xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
     ax2.tick_params(labelsize=8, colors="#555555")
     ax2.set_facecolor("white")
     ax2.grid(axis="y", color=GRID_COL, linewidth=0.8, zorder=1)
@@ -555,12 +778,14 @@ def _build_elements(
             cell.append(Paragraph(sub, kpi_sub))
         return cell
 
-    latest_year = int(latest["year"])
+    latest_year = str(latest["year"])
+    if latest_year.endswith(".0"):
+        latest_year = latest_year[:-2]
     kpi_data = [[
-        kpi_cell("REVENUE",     fmt_currency(latest["revenue"]),  f"FY {latest_year}"),
-        kpi_cell("NET MARGIN",  fmt_pct(latest["net_margin"]),    f"FY {latest_year}"),
-        kpi_cell("ROE",         fmt_pct(latest["roe"]),           f"FY {latest_year}"),
-        kpi_cell("CURRENT RATIO", fmt_ratio(latest["current_ratio"]), f"FY {latest_year}"),
+        kpi_cell("REVENUE",     fmt_currency(latest["revenue"]),  f"{latest_year}"),
+        kpi_cell("NET MARGIN",  fmt_pct(latest["net_margin"]),    f"{latest_year}"),
+        kpi_cell("ROE",         fmt_pct(latest["roe"]),           f"{latest_year}"),
+        kpi_cell("CURRENT RATIO", fmt_ratio(latest["current_ratio"]), f"{latest_year}"),
     ]]
     kpi_col_w = _CW / 4 - 4
     kpi_table = Table(kpi_data, colWidths=[kpi_col_w] * 4, hAlign="LEFT")
@@ -591,7 +816,7 @@ def _build_elements(
     rows = [COL_HEADERS]
     for _, r in recent.iterrows():
         rows.append([
-            str(int(r["year"])),
+            str(r["year"])[:-2] if str(r["year"]).endswith(".0") else str(r["year"]),
             fmt_currency(r["revenue"]),
             fmt_currency(r["net_income"]),
             fmt_pct(r["net_margin"]),

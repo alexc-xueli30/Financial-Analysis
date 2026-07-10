@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 import time
 
 import matplotlib
@@ -23,6 +24,7 @@ app.mount("/static", StaticFiles(directory=_STATIC), name="static")
 
 class AnalyzeRequest(BaseModel):
     ticker: str
+    period: str = "annual"  # "annual" or "quarterly"
 
 
 @app.get("/")
@@ -33,10 +35,13 @@ def index():
 @app.post("/analyze")
 async def analyze(body: AnalyzeRequest):
     ticker = body.ticker.strip()
+    period = body.period.strip().lower()
+    if period not in ("annual", "quarterly"):
+        period = "annual"
     if not ticker:
         raise HTTPException(status_code=400, detail="Ticker symbol or company name is required.")
     try:
-        return await asyncio.to_thread(_run_analysis, ticker)
+        return await asyncio.to_thread(_run_analysis, ticker, period)
     except fa.TickerNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except fa.SECDataError as exc:
@@ -47,27 +52,35 @@ async def analyze(body: AnalyzeRequest):
         raise HTTPException(status_code=500, detail=f"Unexpected error: {exc}")
 
 
-def _run_analysis(ticker: str) -> dict:
+def _run_analysis(ticker: str, period: str = "annual") -> dict:
     cik, ticker = fa.resolve_company(ticker)
     facts_data = fa.get_company_facts(cik)
     time.sleep(0.5)  # SEC rate limiting
 
-    df = fa.build_ratio_table(facts_data)
+    df = fa.build_ratio_table(facts_data, period_type=period)
     flags = fa.flag_risks(df)
     fa.generate_report(ticker, df, flags, _REPORTS)
 
     latest = df.iloc[-1]
+    latest_year = str(latest["year"])
+    if latest_year.endswith(".0"):
+        latest_year = latest_year[:-2]
+
     kpis = {
         "revenue":       fa.fmt_currency(latest["revenue"]),
         "net_margin":    fa.fmt_pct(latest["net_margin"]),
         "roe":           fa.fmt_pct(latest["roe"]),
         "current_ratio": fa.fmt_ratio(latest["current_ratio"]),
-        "latest_year":   int(latest["year"]),
+        "latest_year":   latest_year,
     }
 
-    history = [
-        {
-            "year":           int(r["year"]),
+    history = []
+    for _, r in df.iterrows():
+        year_str = str(r["year"])
+        if year_str.endswith(".0"):
+            year_str = year_str[:-2]
+        history.append({
+            "year":           year_str,
             "revenue":        fa.fmt_currency(r["revenue"]),
             "net_income":     fa.fmt_currency(r["net_income"]),
             "net_margin":     fa.fmt_pct(r["net_margin"]),
@@ -75,26 +88,30 @@ def _run_analysis(ticker: str) -> dict:
             "debt_to_equity": fa.fmt_ratio(r["debt_to_equity"]),
             "roe":            fa.fmt_pct(r["roe"]),
             "roa":            fa.fmt_pct(r["roa"]),
-        }
-        for _, r in df.iterrows()
-    ]
+        })
 
     _RED_KEYWORDS = {"Negative net income", "Current ratio below 1.0"}
-    formatted_flags = [
-        {
-            "year":     year,
+    formatted_flags = []
+    for year, msg in flags:
+        year_str = str(year)
+        if year_str.endswith(".0"):
+            year_str = year_str[:-2]
+        formatted_flags.append({
+            "year":     year_str,
             "message":  msg,
             "severity": "red" if any(kw in msg for kw in _RED_KEYWORDS) else "amber",
-        }
-        for year, msg in flags
-    ]
+        })
 
     return {"ticker": ticker, "kpis": kpis, "history": history, "flags": formatted_flags}
 
 
+_TICKER_RE = re.compile(r'^[A-Z0-9.\-]{1,10}$')
+
 @app.get("/report/{ticker}")
 async def download_report(ticker: str):
     ticker = ticker.upper().strip()
+    if not _TICKER_RE.match(ticker):
+        raise HTTPException(status_code=400, detail="Invalid ticker symbol.")
     pdf_path = os.path.join(_REPORTS, f"{ticker}_report.pdf")
     if not os.path.exists(pdf_path):
         # /tmp is ephemeral on serverless platforms — regenerate if not cached
