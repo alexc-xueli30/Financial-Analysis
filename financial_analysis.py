@@ -40,7 +40,8 @@ _MARGIN          = 48              # 0.67 inch
 _CW              = _PAGE_W - 2 * _MARGIN   # content width: 516 pts
 
 
-HEADERS = {"User-Agent": "Alex alexc.business07@gmail.com"}
+_SEC_CONTACT = os.environ.get("SEC_CONTACT", "sec-analyzer contact@example.com")
+HEADERS = {"User-Agent": _SEC_CONTACT}
 _SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 _COMPANYFACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
 _REVENUE_CONCEPTS = [

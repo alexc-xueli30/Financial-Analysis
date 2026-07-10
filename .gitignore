@@ -7,3 +7,4 @@ charts/
 .DS_Store
 venv/
 .venv/
+.gstack/

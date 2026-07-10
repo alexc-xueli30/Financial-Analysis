@@ -1,6 +1,6 @@
-fastapi
-uvicorn[standard]
-requests
-pandas
-matplotlib
-reportlab
+fastapi==0.139.0
+uvicorn[standard]==0.51.0
+requests==2.33.1
+pandas==3.0.2
+matplotlib==3.10.8
+reportlab==5.0.0
