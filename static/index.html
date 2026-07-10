@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SEC Financial Analyzer — Ratio analysis from EDGAR filings</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      /* Brand — 4 tokens */
+      --navy-deep: #0D1B35;
+      --navy:      #1B2A4A;
+      --blue:      #2E6DA4;
+      --blue-lt:   #4A8EC4;
+      /* Surface — 4 tokens */
+      --bg:        #F0F4F8;
+      --surface:   #FFFFFF;
+      --border:    #D8E0EC;
+      --muted:     #6B7F99;
+      /* Semantic — 6 tokens */
+      --red:       #C0392B;
+      --red-lt:    #F08080;
+      --red-bg:    #FEF0EE;
+      --amber:     #C97D0E;
+      --amber-bg:  #FEF6E4;
+      --green:     #1A7A3F;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg);
+      color: var(--navy-deep);
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── HERO ── */
+    .hero {
+      background: var(--navy-deep);
+      padding: 64px 24px 72px;
+      position: relative;
+      overflow: hidden;
+    }
+    /* Dot-grid texture — timeless, no gradient trend markers */
+    .hero::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background-image: radial-gradient(circle, rgba(255,255,255,.055) 1px, transparent 1px);
+      background-size: 28px 28px;
+      pointer-events: none;
+    }
+    /* Soft fade so texture doesn't hard-clip at bottom */
+    .hero::after {
+      content: '';
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      height: 80px;
+      background: linear-gradient(to bottom, transparent, var(--navy-deep));
+      pointer-events: none;
+    }
+
+    .hero-inner {
+      position: relative;
+      z-index: 1;
+      max-width: 640px;
+      margin: 0 auto;
+    }
+
+    .hero-eyebrow {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 2.5px;
+      text-transform: uppercase;
+      color: var(--blue-lt);
+      margin-bottom: 16px;
+    }
+
+    .hero h1 {
+      font-size: clamp(28px, 5vw, 40px);
+      font-weight: 800;
+      color: var(--surface);
+      line-height: 1.15;
+      letter-spacing: -.5px;
+      margin-bottom: 16px;
+    }
+    .hero h1 span { color: var(--blue-lt); }
+
+    .hero-sub {
+      font-size: 15px;
+      font-weight: 400;
+      color: var(--muted);
+      line-height: 1.65;
+      max-width: 500px;
+      margin-bottom: 32px;
+    }
+
+    /* ── SEARCH ── */
+    .search-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      color: var(--blue-lt);
+      margin-bottom: 8px;
+    }
+    .search-row { display: flex; max-width: 540px; }
+    .search-row input {
+      flex: 1;
+      background: rgba(255,255,255,.06);
+      border: 1px solid rgba(255,255,255,.12);
+      border-right: none;
+      border-radius: 4px 0 0 4px;
+      color: var(--surface);
+      font-family: inherit;
+      font-size: 15px;
+      font-weight: 400;
+      padding: 13px 16px;
+      outline: none;
+      transition: border-color .15s, background .15s;
+    }
+    .search-row input::placeholder { color: var(--muted); }
+    .search-row input:focus {
+      border-color: var(--blue-lt);
+      background: rgba(255,255,255,.09);
+    }
+    .search-row button {
+      padding: 13px 24px;
+      background: var(--blue);
+      color: var(--surface);
+      border: none;
+      border-radius: 0 4px 4px 0;
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background .15s;
+    }
+    .search-row button:hover:not(:disabled) { background: var(--blue-lt); }
+    .search-row button:focus-visible {
+      outline: 2px solid var(--blue-lt);
+      outline-offset: 2px;
+    }
+    .search-row button:disabled { opacity: .45; cursor: not-allowed; }
+
+    .search-hint {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 10px;
+    }
+
+    .error-box {
+      max-width: 540px;
+      background: rgba(192,57,43,.18);
+      border: 1px solid rgba(192,57,43,.4);
+      border-radius: 4px;
+      color: var(--red-lt);
+      font-size: 13px;
+      padding: 10px 14px;
+      margin-top: 12px;
+      display: none;
+    }
+
+    /* ── STAT STRIP ── */
+    .stat-strip {
+      background: var(--navy);
+      padding: 16px 24px;
+      border-bottom: 1px solid rgba(255,255,255,.06);
+      display: flex;
+      justify-content: center;
+      gap: 40px;
+    }
+    .stat-item {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+    }
+    .stat-num {
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--surface);
+    }
+    .stat-lbl {
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+
+    /* ── LOADING ── */
+    #loading {
+      max-width: 860px;
+      margin: 48px auto;
+      padding: 0 24px;
+      text-align: center;
+      display: none;
+    }
+    .spinner {
+      width: 36px; height: 36px;
+      border: 2px solid var(--border);
+      border-top-color: var(--blue);
+      border-radius: 50%;
+      animation: spin .75s linear infinite;
+      margin: 0 auto 14px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) {
+      .spinner { animation-duration: 0.01ms; }
+    }
+    #loading p { color: var(--muted); font-size: 13px; font-weight: 500; }
+    #loading .sub { font-size: 11px; color: var(--border); margin-top: 6px; }
+
+    /* ── RESULTS ── */
+    #results {
+      max-width: 900px;
+      margin: 40px auto;
+      padding: 0 24px 72px;
+      display: none;
+    }
+
+    .results-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      margin-bottom: 24px;
+      padding-bottom: 16px;
+      border-bottom: 2px solid var(--navy-deep);
+    }
+    .results-header h2 {
+      font-size: 22px;
+      font-weight: 800;
+      color: var(--navy-deep);
+    }
+    .result-year {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--muted);
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      margin-top: 4px;
+    }
+
+    .download-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 18px;
+      background: var(--navy);
+      color: var(--surface);
+      text-decoration: none;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      transition: background .15s;
+    }
+    .download-btn:hover { background: var(--blue); }
+    .download-btn:focus-visible {
+      outline: 2px solid var(--blue);
+      outline-offset: 2px;
+    }
+
+    /* ── KPI CARDS ── */
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1px;
+      background: var(--border);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      overflow: hidden;
+      margin-bottom: 16px;
+    }
+    .kpi-card {
+      background: var(--surface);
+      padding: 24px 16px 20px;
+      text-align: center;
+      border-top: 3px solid var(--blue);
+    }
+    .kpi-label {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1.2px;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+    .kpi-value {
+      font-size: 22px;
+      font-weight: 800;
+      color: var(--navy-deep);
+      line-height: 1;
+    }
+    .kpi-sub {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 6px;
+    }
+
+    /* ── SECTIONS ── */
+    .section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      overflow: hidden;
+      margin-bottom: 12px;
+    }
+    .section-title {
+      background: var(--navy);
+      color: var(--surface);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      padding: 10px 16px;
+    }
+
+    /* ── TABLE ── */
+    table { width: 100%; border-collapse: collapse; }
+    thead th {
+      background: var(--navy-deep);
+      color: rgba(255,255,255,.65);
+      padding: 9px 12px;
+      font-size: 11px;
+      font-weight: 600;
+      text-align: right;
+      white-space: nowrap;
+      letter-spacing: .5px;
+    }
+    thead th:first-child { text-align: center; }
+    tbody td {
+      padding: 9px 12px;
+      text-align: right;
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+      color: var(--navy);
+    }
+    tbody td:first-child {
+      text-align: center;
+      font-weight: 700;
+      color: var(--navy-deep);
+    }
+    tbody tr:last-child td { border-bottom: none; }
+    tbody tr:nth-child(even) td { background: var(--bg); }
+    tbody tr:hover td { background: rgba(46,109,164,.04); }
+
+    /* ── FLAGS ── */
+    .flag-body { padding: 16px; }
+    .flag-list { display: flex; flex-direction: column; gap: 6px; }
+    .flag-item {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 10px 14px;
+      border-radius: 3px;
+      border-left: 3px solid;
+    }
+    .flag-item.red   { background: var(--red-bg);   border-color: var(--red);   }
+    .flag-item.amber { background: var(--amber-bg); border-color: var(--amber); }
+    .flag-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .flag-item.red   .flag-dot { background: var(--red);   }
+    .flag-item.amber .flag-dot { background: var(--amber); }
+    .flag-year { font-size: 13px; font-weight: 700; color: var(--navy-deep); min-width: 38px; }
+    .flag-msg  { font-size: 13px; color: var(--navy); }
+    .no-flags  { font-size: 13px; font-weight: 500; color: var(--green); }
+
+    /* ── RESPONSIVE ── */
+    @media (max-width: 700px) {
+      .hero { padding: 40px 16px 56px; }
+      .stat-strip { gap: 24px; padding: 14px 16px; }
+      .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+      .search-row { flex-direction: column; max-width: none; }
+      .search-row input {
+        border-right: 1px solid rgba(255,255,255,.12);
+        border-bottom: none;
+        border-radius: 4px 4px 0 0;
+      }
+      .search-row button { border-radius: 0 0 4px 4px; }
+      .results-header { flex-direction: column; align-items: flex-start; gap: 16px; }
+    }
+    @media (max-width: 480px) {
+      .hero h1 { font-size: 26px; }
+      .stat-strip { flex-wrap: wrap; gap: 16px; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- HERO -->
+<section class="hero">
+  <div class="hero-inner">
+
+    <p class="hero-eyebrow">SEC Financial Analyzer</p>
+
+    <h1>Financial analysis<br>for <span>any public company</span></h1>
+
+    <p class="hero-sub">
+      Live data from SEC EDGAR's official XBRL API — net margin, ROE, leverage, and liquidity
+      for any company that files 10-K reports, in seconds.
+    </p>
+
+    <div class="search-label">Ticker or company name</div>
+    <div class="search-row">
+      <input
+        id="ticker-input"
+        type="text"
+        placeholder="e.g. AAPL, Apple Inc., TSLA, Goldman Sachs"
+        maxlength="80"
+        autocomplete="off"
+        autocorrect="off"
+        spellcheck="false"
+      />
+      <button id="analyze-btn" onclick="runAnalysis()">Analyze</button>
+    </div>
+    <p class="search-hint">Works for any company that files 10-K with the SEC &middot; Usually 5&ndash;15 seconds</p>
+    <div class="error-box" id="error-box"></div>
+
+  </div>
+</section>
+
+<!-- STAT STRIP -->
+<div class="stat-strip">
+  <div class="stat-item">
+    <span class="stat-num">10,000+</span>
+    <span class="stat-lbl">Companies</span>
+  </div>
+  <div class="stat-item">
+    <span class="stat-num">20+ Years</span>
+    <span class="stat-lbl">Historical Data</span>
+  </div>
+  <div class="stat-item">
+    <span class="stat-num">8 Ratios</span>
+    <span class="stat-lbl">Per Filing Year</span>
+  </div>
+  <div class="stat-item">
+    <span class="stat-num">Live</span>
+    <span class="stat-lbl">EDGAR XBRL Feed</span>
+  </div>
+</div>
+
+<!-- LOADING -->
+<div id="loading">
+  <div class="spinner"></div>
+  <p id="loading-msg">Fetching SEC EDGAR data&hellip;</p>
+  <p class="sub">This usually takes 5&ndash;15 seconds</p>
+</div>
+
+<!-- RESULTS -->
+<div id="results">
+
+  <div class="results-header">
+    <div>
+      <h2 id="result-ticker"></h2>
+      <div class="result-year" id="result-year"></div>
+    </div>
+    <a class="download-btn" id="download-link" href="#" target="_blank">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+        <polyline points="7 10 12 15 17 10"/>
+        <line x1="12" y1="15" x2="12" y2="3"/>
+      </svg>
+      Download PDF
+    </a>
+  </div>
+
+  <div class="kpi-grid">
+    <div class="kpi-card">
+      <div class="kpi-label">Revenue</div>
+      <div class="kpi-value" id="kpi-revenue">—</div>
+      <div class="kpi-sub" id="kpi-sub-1">—</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Net Margin</div>
+      <div class="kpi-value" id="kpi-margin">—</div>
+      <div class="kpi-sub" id="kpi-sub-2">—</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">ROE</div>
+      <div class="kpi-value" id="kpi-roe">—</div>
+      <div class="kpi-sub" id="kpi-sub-3">—</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Current Ratio</div>
+      <div class="kpi-value" id="kpi-cr">—</div>
+      <div class="kpi-sub" id="kpi-sub-4">—</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Financial Summary</div>
+    <table>
+      <thead>
+        <tr>
+          <th>Year</th>
+          <th>Revenue</th>
+          <th>Net Income</th>
+          <th>Net Margin</th>
+          <th>Current Ratio</th>
+          <th>Debt / Equity</th>
+          <th>ROE</th>
+          <th>ROA</th>
+        </tr>
+      </thead>
+      <tbody id="history-body"></tbody>
+    </table>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Risk Indicators</div>
+    <div class="flag-body">
+      <div class="flag-list" id="flag-list"></div>
+    </div>
+  </div>
+
+</div><!-- #results -->
+
+<script>
+  const input = document.getElementById('ticker-input');
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') runAnalysis(); });
+
+  window.runAnalysis = async function () {
+    const query = input.value.trim();
+    if (!query) { input.focus(); return; }
+    setState('loading', query);
+    try {
+      const res = await fetch('/analyze', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ ticker: query }),
+      });
+      let data;
+      try { data = await res.json(); } catch { data = null; }
+      if (!res.ok) throw new Error(data?.detail || `Server error (${res.status})`);
+      renderResults(data);
+      setState('results');
+    } catch (err) {
+      setState('error', null, err.message);
+    }
+  };
+
+  function renderResults(data) {
+    const fy = `FY ${data.kpis.latest_year}`;
+
+    document.getElementById('result-ticker').textContent = data.ticker;
+    document.getElementById('result-year').textContent   = fy;
+    document.getElementById('download-link').href        = `/report/${data.ticker}`;
+
+    document.getElementById('kpi-revenue').textContent = data.kpis.revenue;
+    document.getElementById('kpi-margin').textContent  = data.kpis.net_margin;
+    document.getElementById('kpi-roe').textContent     = data.kpis.roe;
+    document.getElementById('kpi-cr').textContent      = data.kpis.current_ratio;
+    ['kpi-sub-1','kpi-sub-2','kpi-sub-3','kpi-sub-4'].forEach(id =>
+      document.getElementById(id).textContent = fy
+    );
+
+    document.getElementById('history-body').innerHTML = data.history.map(r => `
+      <tr>
+        <td>${r.year}</td>
+        <td>${r.revenue}</td>
+        <td>${r.net_income}</td>
+        <td>${r.net_margin}</td>
+        <td>${r.current_ratio}</td>
+        <td>${r.debt_to_equity}</td>
+        <td>${r.roe}</td>
+        <td>${r.roa}</td>
+      </tr>`).join('');
+
+    const flagList = document.getElementById('flag-list');
+    if (data.flags.length === 0) {
+      flagList.innerHTML = '<p class="no-flags">No risk indicators identified.</p>';
+    } else {
+      flagList.innerHTML = data.flags.map(f => `
+        <div class="flag-item ${f.severity}">
+          <div class="flag-dot"></div>
+          <span class="flag-year">${f.year}</span>
+          <span class="flag-msg">${f.message}</span>
+        </div>`).join('');
+    }
+
+    document.getElementById('results').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function setState(state, query = null, errorMsg = null) {
+    const btn     = document.getElementById('analyze-btn');
+    const loading = document.getElementById('loading');
+    const results = document.getElementById('results');
+    const errBox  = document.getElementById('error-box');
+
+    loading.style.display = 'none';
+    results.style.display = 'none';
+    errBox.style.display  = 'none';
+    btn.disabled    = false;
+    btn.textContent = 'Analyze';
+
+    if (state === 'loading') {
+      btn.disabled    = true;
+      btn.textContent = 'Analyzing…';
+      document.getElementById('loading-msg').textContent =
+        `Fetching EDGAR data for "${query}"…`;
+      loading.style.display = 'block';
+    } else if (state === 'results') {
+      results.style.display = 'block';
+    } else if (state === 'error') {
+      errBox.textContent   = errorMsg;
+      errBox.style.display = 'block';
+    }
+  }
+</script>
+
+</body>
+</html>
