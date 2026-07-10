@@ -1,4 +1,4 @@
 # Financial-Analysis
-Uses the Live data from SEC EDGAR's official XBRL API — net margin, ROE, leverage, and liquidity for any company that files 10-K reports, in seconds.
+Skip complex spreadsheets. Instantly analyze multi-year income statements and balance sheets, audit solvency, and compute margins directly from official XBRL filings.
 
 Vercel Link: https://financial-analysis-beige-pi.vercel.app/
