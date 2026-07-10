@@ -15,9 +15,8 @@ import financial_analysis as fa
 app = FastAPI(title="SEC Financial Analyzer")
 
 _BASE    = os.path.dirname(os.path.abspath(__file__))
-_REPORTS = os.path.join(_BASE, "reports")
+_REPORTS = "/tmp/reports" if os.environ.get("VERCEL") else os.path.join(_BASE, "reports")
 _STATIC  = os.path.join(_BASE, "static")
-os.makedirs(_REPORTS, exist_ok=True)
 
 app.mount("/static", StaticFiles(directory=_STATIC), name="static")
 
@@ -94,14 +93,21 @@ def _run_analysis(ticker: str) -> dict:
 
 
 @app.get("/report/{ticker}")
-def download_report(ticker: str):
+async def download_report(ticker: str):
     ticker = ticker.upper().strip()
     pdf_path = os.path.join(_REPORTS, f"{ticker}_report.pdf")
     if not os.path.exists(pdf_path):
-        raise HTTPException(
-            status_code=404,
-            detail="Report not found. Run /analyze for this ticker first.",
-        )
+        # /tmp is ephemeral on serverless platforms — regenerate if not cached
+        try:
+            await asyncio.to_thread(_run_analysis, ticker)
+        except fa.TickerNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        except fa.SECDataError as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+        except fa.InsufficientDataError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Unexpected error: {exc}")
     return FileResponse(
         pdf_path,
         media_type="application/pdf",
