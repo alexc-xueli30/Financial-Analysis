@@ -45,10 +45,13 @@ HEADERS = {"User-Agent": _SEC_CONTACT}
 _SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 _COMPANYFACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
 _REVENUE_CONCEPTS = [
-    "RevenuesNetOfInterestExpense",                         # investment banks (GS, MS) — least precise, set first so standard tags override
-    "SalesRevenueNet",                                      # pre-2018 tag
-    "Revenues",                                             # general tag (overwrites banking fallback where both exist)
-    "RevenueFromContractWithCustomerExcludingAssessedTax",  # ASC 606 (2018+)
+    # Least precise / most sector-specific first; more standard tags override below.
+    "RevenuesNetOfInterestExpense",                          # investment banks (GS, MS)
+    "RegulatedAndUnregulatedOperatingRevenue",               # utilities (NEE, DUK, SO, etc.)
+    "SalesRevenueNet",                                       # pre-2018 general tag
+    "Revenues",                                              # standard general tag; overrides sector fallbacks above
+    "RevenueFromContractWithCustomerExcludingAssessedTax",   # ASC 606 (2018+) — most common variant
+    "RevenueFromContractWithCustomerIncludingAssessedTax",   # ASC 606 (2018+) — used by some utilities and retailers
 ]
 
 # Equity: broad → precise so the precise tag wins when both are present.
@@ -283,7 +286,8 @@ def build_ratio_table(facts_data: dict) -> pd.DataFrame:
     liabilities = {y: assets[y] - equity[y] for y in assets if y in equity}
 
     # Core intersection: revenue, net income, assets, equity are always required.
-    # Current assets/liabilities are optional — financial institutions don't report them.
+    # Current assets/liabilities are optional — financial institutions don't report them,
+    # and some companies only added current breakdown disclosure in later filings.
     core_years = sorted(
         set(revenues)
         & set(net_income)
@@ -298,8 +302,6 @@ def build_ratio_table(facts_data: dict) -> pd.DataFrame:
             "The company may use non-standard XBRL tags or have incomplete filings."
         )
 
-    has_current = bool(current_assets and current_liabilities)
-
     rows = []
     for y in core_years:
         rev = revenues[y]
@@ -311,9 +313,8 @@ def build_ratio_table(facts_data: dict) -> pd.DataFrame:
 
         cl = current_liabilities.get(y)
         ca = current_assets.get(y)
-        if has_current and (cl is None or cl == 0):
-            continue
-
+        # Use NaN when current ratio data is absent — never drop the row for a missing
+        # current ratio; banks and early XBRL filers often omit this breakdown.
         current_ratio = (ca / cl) if (ca is not None and cl) else float("nan")
 
         rows.append({
